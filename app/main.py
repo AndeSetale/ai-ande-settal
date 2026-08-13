@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from app.api.endpoints import router as api_router
 from app.config import settings
 
 app = FastAPI(
@@ -8,7 +9,7 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Configuration CORS pour autoriser Backend Django et Frontend Angular
+# Configuration CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,6 +17,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Inclusion des endpoints API
+app.include_router(api_router)
 
 
 @app.get("/health", tags=["Santé"])
