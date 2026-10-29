@@ -10,6 +10,11 @@ from PIL import Image
 from app.config import settings
 from app.schemas import IncidentType, NiveauUrgence
 
+# Score attribué aux prédictions non fiables (fallback heuristique, étiquette inconnue).
+# Volontairement sous le seuil de 0.6 du Backend Django, qui sinon remplacerait
+# le type d'incident saisi par le citoyen par cette simple supposition.
+FALLBACK_SCORE = 0.5
+
 
 def analyze_image_vision(image_bytes: bytes) -> tuple[IncidentType, float, NiveauUrgence]:
     """
@@ -28,9 +33,13 @@ def analyze_image_vision(image_bytes: bytes) -> tuple[IncidentType, float, Nivea
         tuple[IncidentType, float, NiveauUrgence] : (Type détecté, Score de certitude 0-1, Urgence).
     """
     # URL de l'API d'Inférence Hugging Face pour le modèle sélectionné
-    api_url = f"https://api-inference.huggingface.co/models/{settings.HF_VISION_MODEL}"
+    # (l'ancienne URL api-inference.huggingface.co a été retirée par Hugging Face)
+    api_url = f"https://router.huggingface.co/hf-inference/models/{settings.HF_VISION_MODEL}"
     # Entête d'autorisation Bearer Token si la clé HF_TOKEN est configurée
-    headers = {"Authorization": f"Bearer {settings.HF_TOKEN}"} if settings.HF_TOKEN else {}
+    headers = {
+        "Authorization": f"Bearer {settings.HF_TOKEN}",
+        "Content-Type": "image/jpeg",
+    } if settings.HF_TOKEN else {}
 
     try:
         if settings.HF_TOKEN:
@@ -46,6 +55,9 @@ def analyze_image_vision(image_bytes: bytes) -> tuple[IncidentType, float, Nivea
 
                     # Mappage du label anglais vers le type d'incident et calcul de l'urgence
                     incident_type = _map_label_to_incident_type(label)
+                    if incident_type is None:
+                        # Étiquette sans rapport avec un incident : type par défaut, confiance plafonnée
+                        incident_type, score = IncidentType.DECHETS, min(score, FALLBACK_SCORE)
                     urgency = _calculate_urgency(incident_type, score)
                     return incident_type, round(score, 2), urgency
     except Exception as e:
@@ -56,7 +68,7 @@ def analyze_image_vision(image_bytes: bytes) -> tuple[IncidentType, float, Nivea
     return _heuristic_vision_fallback(image_bytes)
 
 
-def _map_label_to_incident_type(label: str) -> IncidentType:
+def _map_label_to_incident_type(label: str) -> IncidentType | None:
     """
     Convertit les étiquettes en anglais produites par le modèle Hugging Face
     en types d'incidents officiels de la plateforme Andë Sétal.
@@ -80,8 +92,8 @@ def _map_label_to_incident_type(label: str) -> IncidentType:
     elif any(k in label for k in ["tree", "branch", "wood", "plant", "foliage"]):
         return IncidentType.ARBRE
 
-    # Valeur de secours par défaut si aucun mot-clé spécifique n'est reconnu
-    return IncidentType.DECHETS
+    # Aucun mot-clé reconnu : l'appelant décide de la valeur de secours
+    return None
 
 
 def _calculate_urgency(incident_type: IncidentType, score: float) -> NiveauUrgence:
@@ -121,9 +133,9 @@ def _heuristic_vision_fallback(image_bytes: bytes) -> tuple[IncidentType, float,
         else:
             incident_type = IncidentType.VOIRIE
 
-        score = 0.88
+        score = FALLBACK_SCORE
         urgency = _calculate_urgency(incident_type, score)
         return incident_type, score, urgency
     except Exception:
         # Valeur de secours ultime en cas d'erreur de décodage d'image
-        return IncidentType.DECHETS, 0.85, NiveauUrgence.ELEVE
+        return IncidentType.DECHETS, FALLBACK_SCORE, NiveauUrgence.ROUTINE
